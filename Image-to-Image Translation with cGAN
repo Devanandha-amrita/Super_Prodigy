@@ -1,0 +1,224 @@
+from google.colab import files
+files.upload()
+
+!mkdir ~/.  kaggle
+!cp kaggle.json ~/.kaggle/
+!chmod 600 ~/.kaggle/kaggle.json
+
+!kaggle datasets download -d vikramtiwari/pix2pix-dataset
+
+import zipfile
+zip_ref = zipfile.ZipFile('/content/pix2pix-dataset.zip', 'r')
+zip_ref.extractall('/content')
+zip_ref.close()
+
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import numpy as np
+
+import os
+
+images_dir= '/content/facades/facades/train'
+
+sample_img=os.path.join(images_dir,'1.jpg')
+
+from IPython.display import Image
+Image(sample_img)
+
+image=tf.io.read_file(sample_img)
+decode_img=tf.image.decode_jpeg(image)
+decode_img.shape
+
+a = decode_img.shape[1]
+a = a//2
+real_img = decode_img[:,:a,:]
+fk_img = decode_img[:,a:,:]
+plt.imshow(real_img)
+plt.show()
+plt.imshow(fk_img)
+plt.show()
+
+def split_R_F(image_file):
+  image=tf.io.read_file(image_file)
+  image=tf.image.decode_jpeg(image)
+  a=tf.shape(image)[1]
+  a=a//2
+  real_img=image[:,:a,:]
+  in_img=image[:,a:,:]
+  return real_img,in_img
+
+len(os.listdir(images_dir))
+
+def preprocess(image_file):
+  real_img,in_img=split_R_F(image_file)
+  real_img=tf.cast(real_img,tf.float32)
+  in_img=tf.cast(in_img,tf.float32)
+  in_img=in_img/255.0
+  real_img=real_img/255.0
+  return real_img,in_img
+
+img_path=[os.path.join(images_dir,file) for file in os.listdir(images_dir)]
+
+img_path
+
+path_tensor= tf.data.Dataset.from_tensor_slices(img_path)
+
+dataset = path_tensor.map(preprocess)
+
+dataset = dataset.batch(4)
+dataset = dataset.repeat()
+
+for fk,real in dataset.take(1):
+  plt.imshow(fk[0])
+  plt.show()
+  plt.imshow(real[0])
+  plt.show()
+
+class UpSampling(tf.keras.layers.Layer):
+  def __init__(self,channels,kernal,dropout=False,strides=1,**kwargs):
+    super().__init__(**kwargs)
+    self.dropout = dropout
+    self.unsampling = tf.keras.layers.UpSampling2D(size=(2,2))
+    self.conv = tf.keras.layers.Conv2D(filters=channels,kernel_size=kernal,strides=strides,padding='same')
+    self.instance_norm = tf.keras.layers.GroupNormalization(groups=-1)
+    self.leaky_relu = tf.keras.layers.LeakyReLU(0.2)
+    def call(self,inputs):
+      x = self.upsampling(inputs)
+      x = self.conv(x)
+      x = self.instance_norm(x)
+      x = self.leaky_relu(x)
+      if self.dropout:
+        x = tf.keras.layers.Dropout(x,0.5)
+      return x
+
+class DownSampling(tf.keras.layers.Layer):
+  def __init__(self,channels,kernal,strides=2,apply_norm=True,**kwargs):
+    super().__init__(**kwargs)
+    self.apply_norm = apply_norm
+    self.conv = tf.keras.layers.Conv2D(filters=channels,kernel_size=kernal,strides=strides,padding='same')
+    self.instance_norm = tf.keras.layers.GroupNormalization(groups=-1)
+    self.leaky_relu = tf.keras.layers.LeakyReLU(0.2)
+
+  def call(self,inputs):
+    x = self.conv(inputs)
+    if self.apply_norm:
+      x = self.instance_norm(x)
+    x = self.leaky_relu(x)
+    return x
+
+!pip install tensorflow
+
+import tensorflow as tf
+
+class Generator(tf.keras.Model):
+  def __init__(self,**kwargs):
+    super().__init__(**kwargs)
+    self.d1 = DownSampling(64,3)
+    self.d2 = DownSampling(128,3)
+    self.d3 = DownSampling(256,3)
+    self.d4 = DownSampling(256,3)
+    self.d5 = DownSampling(256,3)
+    self.d6 = DownSampling(256,3)
+    self.d7 = DownSampling(256,3)
+    self.u6 = UpSampling(256,3, dropout=True)
+    self.u5 = UpSampling(256,3, dropout=True)
+    self.u4 = UpSampling(256,3, dropout=True)
+    self.u3 = UpSampling(256,3)
+    self.u2 = UpSampling(128,3)
+    self.u1 = UpSampling(64,3)
+    self.last_upsampling = tf.keras.layers.UpSampling2D(size=(2,2))
+    self.last_conv = tf.keras.layers.Conv2D(filters=3,kernel_size=3,padding='same',activation='sigmoid')
+  def call(self,inputs):
+    xd1 = self.d1(inputs)
+    xd2 = self.d2(xd1)
+    xd3 = self.d3(xd2)
+    xd4 = self.d4(xd3)
+    xd5 = self.d5(xd4)
+    xd6 = self.d6(xd5)
+    xd7 = self.d7(xd6)
+    xu6 = self.u6(xd7)
+    xu5 = self.u5(tf.keras.layers.Concatenate(axis=-1)([xu6,xd6]))
+    xu4 = self.u4(tf.keras.layers.Concatenate()([xu5,xd5]))
+    xu3 = self.u3(tf.keras.layers.Concatenate()([xu4,xd4]))
+    xu2 = self.u2(tf.keras.layers.Concatenate()([xu3,xd3]))
+    xu1 = self.u1(tf.keras.layers.Concatenate()([xu2,xd2]))
+    x = self.last_unsampling(tf.keras.layers.Concatenate()([xu1,xd1]))
+    x = self.last_conv(x)
+    return x
+
+class UpSampling(tf.keras.layers.Layer):
+  def __init__(self,channels,kernal,dropout=False,strides=1,**kwargs):
+    super().__init__(**kwargs)
+    self.dropout = dropout
+    self.unsampling = tf.keras.layers.UpSampling2D(size=(2,2))
+    self.conv = tf.keras.layers.Conv2D(filters=channels,kernel_size=kernal,strides=strides,padding='same')
+    self.instance_norm = tf.keras.layers.GroupNormalization(groups=-1)
+    self.leaky_relu = tf.keras.layers.LeakyReLU(0.2)
+  # The call method was indented incorrectly, causing it to be defined within the __init__ method.
+  def call(self,inputs):
+    x = self.unsampling(inputs)
+    x = self.conv(x)
+    x = self.instance_norm(x)
+    x = self.leaky_relu(x)
+    if self.dropout:
+      x = tf.keras.layers.Dropout(x,0.5)
+    return x
+
+class UpSampling(tf.keras.layers.Layer):
+  def __init__(self,channels,kernal,dropout=False,strides=1,**kwargs):
+    super().__init__(**kwargs)
+    self.dropout = dropout
+    self.unsampling = tf.keras.layers.UpSampling2D(size=(2,2))
+    self.conv = tf.keras.layers.Conv2D(filters=channels,kernel_size=kernal,strides=strides,padding='same')
+    self.instance_norm = tf.keras.layers.GroupNormalization(groups=-1)
+    self.leaky_relu = tf.keras.layers.LeakyReLU(0.2)
+
+  def call(self,inputs):
+    x = self.unsampling(inputs)
+    x = self.conv(x)
+    x = self.instance_norm(x)
+    x = self.leaky_relu(x)
+    if self.dropout:
+      x = tf.keras.layers.Dropout(0.5)(x) # Call Dropout layer correctly with input x
+    return x
+
+class Generator(tf.keras.Model):
+  def __init__(self,**kwargs):
+    super().__init__(**kwargs)
+    self.d1 = DownSampling(64,3)
+    self.d2 = DownSampling(128,3)
+    self.d3 = DownSampling(256,3)
+    self.d4 = DownSampling(256,3)
+    self.d5 = DownSampling(256,3)
+    self.d6 = DownSampling(256,3)
+    self.d7 = DownSampling(256,3)
+    self.u6 = UpSampling(256,3, dropout=True)
+    self.u5 = UpSampling(256,3, dropout=True)
+    self.u4 = UpSampling(256,3, dropout=True)
+    self.u3 = UpSampling(256,3)
+    self.u2 = UpSampling(128,3)
+    self.u1 = UpSampling(64,3)
+    self.last_upsampling = tf.keras.layers.UpSampling2D(size=(2,2)) # This was defined correctly
+    self.last_conv = tf.keras.layers.Conv2D(filters=3,kernel_size=3,padding='same',activation='sigmoid')
+  def call(self,inputs):
+    xd1 = self.d1(inputs)
+    xd2 = self.d2(xd1)
+    xd3 = self.d3(xd2)
+    xd4 = self.d4(xd3)
+    xd5 = self.d5(xd4)
+    xd6 = self.d6(xd5)
+    xd7 = self.d7(xd6)
+    xu6 = self.u6(xd7)
+    xu5 = self.u5(tf.keras.layers.Concatenate(axis=-1)([xu6,xd6]))
+    xu4 = self.u4(tf.keras.layers.Concatenate()([xu5,xd5]))
+    xu3 = self.u3(tf.keras.layers.Concatenate()([xu4,xd4]))
+    xu2 = self.u2(tf.keras.layers.Concatenate()([xu3,xd3]))
+    xu1 = self.u1(tf.keras.layers.Concatenate()([xu2,xd2]))
+    x = self.last_upsampling(tf.keras.layers.Concatenate()([xu1,xd1])) # Corrected the typo here
+    x = self.last_conv(x)
+    return x
+
+import matplotlib.pyplot as plt
+genarator = Generator()
+gen_output = genarator(tf.expand_dims(tf.cast(fk[0],tf.float32),axis=0))
+plt.imshow(gen_output[0])
