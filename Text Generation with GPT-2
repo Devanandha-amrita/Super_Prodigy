@@ -1,0 +1,21 @@
+!pip install -q gradio
+!pip install -q git+http://github.com/huggingface/transformers.git
+
+import gradio as gr
+import transformers as tf
+from transformers import TFGPT2LMHeadModel,GPT2Tokenizer
+
+tokenizer=GPT2Tokenizer.from_pretrained("gpt2")
+model=TFGPT2LMHeadModel.from_pretrained("gpt2",pad_token_id=tokenizer.eos_token_id)
+
+def generate_text(inp):
+  input_ids=tokenizer.encode(inp,return_tensors="tf")
+  beam_op=model.generate(input_ids,max_length=100,num_beams=5,no_repeat_ngram_size=2,early_stopping=True)
+  op=tokenizer.decode(beam_op[0],skip_special_tokens=True,clean_up_tokenization_spaces=True)
+  return ".".join(op.split(".")[:-1])+"."
+
+!pip install -quiet gradio
+
+output_txt=gr.Textbox()
+gr.Interface(generate_text,"textbox",output_txt,title="GPT-2",description="OpenAI's GPT-2 is an unsupervised language model that \
+can generate coherent text. Go ahead and input a sentence and see what it completes").launch()
