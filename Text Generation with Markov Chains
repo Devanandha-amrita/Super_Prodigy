@@ -1,0 +1,15 @@
+!pip install markovify
+
+import markovify
+import pandas as pd
+df=pd.read_csv('paragraphs.csv')
+print(df.columns)
+df.head()
+n=200
+review_sub=df['This biographical article related to French artistic gymnastics is a stub. You can help Wikipedia by expanding it.'][0:n]
+merg_txt= "".join(review_sub)
+model=markovify.Text(merg_txt)
+for i in range(5):
+  print(model.make_sentence())
+for i in range(3):
+  print(model.make_short_sentence(140))
